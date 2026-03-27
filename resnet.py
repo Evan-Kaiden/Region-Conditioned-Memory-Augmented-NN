@@ -1,0 +1,245 @@
+'''ResNet in PyTorch.
+
+Reference:
+https://github.com/kuangliu/pytorch-cifar/blob/master/models/resnet.py
+'''
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from memorywrap import MemoryWrapLayer as EncoderMemoryWrapLayer
+from memorywrap import BaselineMemory as MemoryWrapLayer
+
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1):
+        super(BasicBlock, self).__init__()
+        self.conv1 = nn.Conv2d(
+            in_planes, planes, kernel_size=3, stride=stride, padding=1,
+            bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3,
+                               stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion*planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion*planes,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion*planes)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+
+class Bottleneck(nn.Module):
+    expansion = 4
+
+    def __init__(self, in_planes, planes, stride=1):
+        super(Bottleneck, self).__init__()
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3,
+                               stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv3 = nn.Conv2d(planes, self.expansion *
+                               planes, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(self.expansion*planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion*planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion*planes,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion*planes)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = F.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+
+class ResNet(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10,
+                 initialize=True):
+        super(ResNet, self).__init__()
+        self.in_planes = 64
+
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3,
+                               stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
+        self.linear = nn.Linear(512*block.expansion, num_classes)
+        if initialize:
+            import math
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                    m.weight.data.normal_(0, math.sqrt(2. / n))
+                elif isinstance(m, nn.BatchNorm2d):
+                    m.weight.data.fill_(1)
+                    m.bias.data.zero_()
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1]*(num_blocks-1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_planes, planes, stride))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out = F.avg_pool2d(out, 4)
+        out = out.view(out.size(0), -1)
+        out = self.linear(out)
+        return out
+
+
+class MemoryResNet(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10, initialize=True):
+        super(MemoryResNet, self).__init__()
+        self.in_planes = 64
+
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3,
+                               stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
+        self.mw = MemoryWrapLayer(512*block.expansion, num_classes)
+        if initialize:
+            import math
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                    m.weight.data.normal_(0, math.sqrt(2. / n))
+                elif isinstance(m, nn.BatchNorm2d):
+                    m.weight.data.fill_(1)
+                    m.bias.data.zero_()
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1]*(num_blocks-1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_planes, planes, stride))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def apply_correlation_mask(self, query_feat, memory_feat, softmax_temp=0.1):
+        B, C, H, W = query_feat.shape
+        BN = memory_feat.shape[0]
+        N = BN // B
+
+        q = F.normalize(query_feat, dim=1)
+        m = F.normalize(memory_feat, dim=1) 
+
+        q = q.view(B, 1, C, H*W)
+        m = m.view(B, N, C, H*W)
+
+        q = q.permute(0, 1, 3, 2)
+        corr = torch.matmul(q, m) 
+
+        memory_mask = corr.sum(dim=2)
+        memory_mask = F.softmax(memory_mask / softmax_temp, dim=2)
+        memory_maps = memory_mask.view(B, N, H, W)
+
+        with torch.no_grad():
+            query_mask = corr.sum(dim=3)
+            query_mask = query_mask.sum(dim=1)
+            query_mask = F.softmax(query_mask / softmax_temp, dim=1)
+            query_maps = query_mask.view(B, H, W)
+
+        memory_mask_spatial = memory_maps.unsqueeze(2)
+        m_out = memory_feat.view(B, N, C, H, W) * memory_mask_spatial
+        m_out = m_out.view(BN, C, H, W)
+
+        return m_out, memory_maps, query_maps
+
+    def forward(self, x, ss, return_weights=False):
+
+        out1 = F.relu(self.bn1(self.conv1(x)))
+        out1_mw = F.relu(self.bn1(self.conv1(ss)))
+
+        out2 = self.layer1(out1)
+        out2_mw = self.layer1(out1_mw)
+
+        out3 = self.layer2(out2)
+        out3_mw = self.layer2(out2_mw)
+
+        out4 = self.layer3(out3)
+        out4_mw = self.layer3(out3_mw)
+
+        out5 = self.layer4(out4)
+        out5_mw = self.layer4(out4_mw)
+
+        out5_mw, memory_maps, query_maps = self.apply_correlation_mask(out5, out5_mw)
+
+        out6 = F.avg_pool2d(out5, 4)
+        out6_mw = F.avg_pool2d(out5_mw.detach(), 4)
+
+        out = out6.view(out6.size(0), -1)
+        out_mw = out6_mw.view(out6_mw.size(0), -1)
+
+        # prediction
+        out_mw = self.mw(out, out_mw, return_weights)
+        return out_mw, memory_maps, query_maps
+
+
+def ResNet18():
+    return ResNet(BasicBlock, [2, 2, 2, 2])
+
+
+def ResNet34():
+    return ResNet(BasicBlock, [3, 4, 6, 3])
+
+
+def ResNet50():
+    return ResNet(Bottleneck, [3, 4, 6, 3])
+
+
+def ResNet101():
+    return ResNet(Bottleneck, [3, 4, 23, 3])
+
+
+def ResNet152():
+    return ResNet(Bottleneck, [3, 8, 36, 3])
+
+
+def MemoryResNet18():
+    return MemoryResNet(BasicBlock, [2, 2, 2, 2])
+
+
+def MemoryResNet34():
+    return MemoryResNet(BasicBlock, [3, 4, 6, 3])
+
+
+def MemoryResNet50():
+    return MemoryResNet(Bottleneck, [3, 4, 6, 3])
+
+
+def MemoryResNet101():
+    return MemoryResNet(Bottleneck, [3, 4, 23, 3])
+
+
+def MemoryResNet152():
+    return MemoryResNet(Bottleneck, [3, 8, 36, 3])
