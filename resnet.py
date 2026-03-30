@@ -6,9 +6,9 @@ https://github.com/kuangliu/pytorch-cifar/blob/master/models/resnet.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from memorywrap import MemoryWrapLayer as EncoderMemoryWrapLayer
-from memorywrap import BaselineMemory as MemoryWrapLayer
-
+# from memorywrap import MemoryWrapLayer as EncoderMemoryWrapLayer
+# from memorywrap import BaselineMemory as MemoryWrapLayer
+from memorywrap import MemoryWrapLayer
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -113,96 +113,126 @@ class ResNet(nn.Module):
         out = self.linear(out)
         return out
 
-
 class MemoryResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10, initialize=True):
+    def __init__(self, block, num_blocks, num_classes=10,
+                 use_correlation=True, initialize=True):
         super(MemoryResNet, self).__init__()
         self.in_planes = 64
-
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3,
-                               stride=1, padding=1, bias=False)
+        self.use_correlation = use_correlation
+ 
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
-        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer1 = self._make_layer(block, 64,  num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.mw = MemoryWrapLayer(512*block.expansion, num_classes)
+        self.mw = MemoryWrapLayer(512 * block.expansion, num_classes)
+ 
         if initialize:
-            import math
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                    m.weight.data.normal_(0, math.sqrt(2. / n))
-                elif isinstance(m, nn.BatchNorm2d):
-                    m.weight.data.fill_(1)
-                    m.bias.data.zero_()
-
+            self._initialize_weights()
+ 
+    def _initialize_weights(self):
+        import math
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+ 
     def _make_layer(self, block, planes, num_blocks, stride):
-        strides = [stride] + [1]*(num_blocks-1)
-        layers = []
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers  = []
         for stride in strides:
             layers.append(block(self.in_planes, planes, stride))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
-
-    def apply_correlation_mask(self, query_feat, memory_feat, softmax_temp=0.1):
+ 
+    def apply_correlation_mask(self, query_feat, memory_feat):
         B, C, H, W = query_feat.shape
-        BN = memory_feat.shape[0]
-        N = BN // B
-
-        q = F.normalize(query_feat, dim=1)
-        m = F.normalize(memory_feat, dim=1) 
-
-        q = q.view(B, 1, C, H*W)
-        m = m.view(B, N, C, H*W)
-
-        q = q.permute(0, 1, 3, 2)
-        corr = torch.matmul(q, m) 
-
-        memory_mask = corr.sum(dim=2)
-        memory_mask = F.softmax(memory_mask / softmax_temp, dim=2)
-        memory_maps = memory_mask.view(B, N, H, W)
-
+        N = memory_feat.shape[0] // B
+ 
+        def minmax(x):
+            mn = x.min(dim=-1, keepdim=True).values
+            mx = x.max(dim=-1, keepdim=True).values
+            return (x - mn) / (mx - mn + 1e-8)
+ 
         with torch.no_grad():
-            query_mask = corr.sum(dim=3)
-            query_mask = query_mask.sum(dim=1)
-            query_mask = F.softmax(query_mask / softmax_temp, dim=1)
-            query_maps = query_mask.view(B, H, W)
-
-        memory_mask_spatial = memory_maps.unsqueeze(2)
-        m_out = memory_feat.view(B, N, C, H, W) * memory_mask_spatial
-        m_out = m_out.view(BN, C, H, W)
-
+            q = F.normalize(query_feat,  dim=1)
+            m = F.normalize(memory_feat, dim=1)
+ 
+            q    = q.view(B, 1, C, H * W).permute(0, 1, 3, 2)   # (B, 1, H*W, C)
+            m    = m.view(B, N, C, H * W)                         # (B, N, C, H*W)
+            corr = torch.matmul(q, m)                             # (B, N, H*W, H*W)
+ 
+            memory_mask = minmax(corr.sum(dim=2))  # (B, N, H*W)
+            query_mask  = minmax(corr.sum(dim=3))  # (B, N, H*W)
+ 
+            memory_maps = memory_mask.view(B, N, H, W)
+            query_maps  = query_mask.view(B, N, H, W)
+ 
+        mask_weight          = getattr(self, 'mask_weight', 1.0)
+        memory_mask_spatial  = memory_maps.unsqueeze(2)           # (B, N, 1, H, W)
+        m_feat               = memory_feat.view(B, N, C, H, W)
+ 
+        m_out = m_feat * (1 - mask_weight) + m_feat * memory_mask_spatial * mask_weight
+        m_out = m_out.view(B * N, C, H, W)
+ 
         return m_out, memory_maps, query_maps
-
+ 
     def forward(self, x, ss, return_weights=False):
-
-        out1 = F.relu(self.bn1(self.conv1(x)))
-        out1_mw = F.relu(self.bn1(self.conv1(ss)))
-
-        out2 = self.layer1(out1)
-        out2_mw = self.layer1(out1_mw)
-
-        out3 = self.layer2(out2)
-        out3_mw = self.layer2(out2_mw)
-
-        out4 = self.layer3(out3)
-        out4_mw = self.layer3(out3_mw)
-
-        out5 = self.layer4(out4)
-        out5_mw = self.layer4(out4_mw)
-
-        out5_mw, memory_maps, query_maps = self.apply_correlation_mask(out5, out5_mw)
-
-        out6 = F.avg_pool2d(out5, 4)
-        out6_mw = F.avg_pool2d(out5_mw.detach(), 4)
-
-        out = out6.view(out6.size(0), -1)
-        out_mw = out6_mw.view(out6_mw.size(0), -1)
-
-        # prediction
-        out_mw = self.mw(out, out_mw, return_weights)
+        B = x.size(0)
+        N = ss.size(0)
+ 
+        out    = F.relu(self.bn1(self.conv1(x)))
+        out_mw = F.relu(self.bn1(self.conv1(ss)))
+ 
+        out    = self.layer1(out);    out_mw = self.layer1(out_mw)
+        out    = self.layer2(out);    out_mw = self.layer2(out_mw)
+        out    = self.layer3(out);    out_mw = self.layer3(out_mw)
+        out    = self.layer4(out);    out_mw = self.layer4(out_mw)
+        # out    : (B, C, H, W)
+        # out_mw : (N, C, H, W)
+ 
+        if self.use_correlation:
+            self.last_query_feat  = out
+            self.last_memory_feat = out_mw
+ 
+            out_mw_exp = (out_mw.unsqueeze(0)
+                                .expand(B, -1, -1, -1, -1)
+                                .reshape(B * N, *out_mw.shape[1:]))
+            out_mw_masked, memory_maps, query_maps = self.apply_correlation_mask(
+                out, out_mw_exp)
+            out_mw = out_mw_masked
+        else:
+            out_mw = (out_mw.unsqueeze(0)
+                            .expand(B, -1, -1, -1, -1)
+                            .reshape(B * N, *out_mw.shape[1:]))
+            H, W   = out.shape[2], out.shape[3]
+            memory_maps = torch.zeros(B, N, H, W, device=x.device)
+            query_maps  = torch.zeros(B, N, H, W, device=x.device)
+ 
+        out    = F.adaptive_avg_pool2d(out,    1).view(B, -1)
+        out_mw = F.adaptive_avg_pool2d(out_mw, 1).view(B, N, -1)
+ 
+        if return_weights:
+            logits_list, weights_list = [], []
+            for b in range(B):
+                logits_b, w_b = self.mw(out[b:b+1], out_mw[b], return_weights=True)
+                logits_list.append(logits_b)
+                weights_list.append(w_b)
+            logits      = torch.cat(logits_list,  dim=0)
+            att_weights = torch.cat(weights_list, dim=0)
+            out_mw = (logits, att_weights)
+        else:
+            out_list = []
+            for b in range(B):
+                out_list.append(self.mw(out[b:b+1], out_mw[b], return_weights=False))
+            out_mw = torch.cat(out_list, dim=0)
+ 
         return out_mw, memory_maps, query_maps
+ 
 
 
 def ResNet18():
@@ -225,21 +255,17 @@ def ResNet152():
     return ResNet(Bottleneck, [3, 8, 36, 3])
 
 
-def MemoryResNet18():
-    return MemoryResNet(BasicBlock, [2, 2, 2, 2])
-
-
-def MemoryResNet34():
-    return MemoryResNet(BasicBlock, [3, 4, 6, 3])
-
-
-def MemoryResNet50():
-    return MemoryResNet(Bottleneck, [3, 4, 6, 3])
-
-
-def MemoryResNet101():
-    return MemoryResNet(Bottleneck, [3, 4, 23, 3])
-
-
-def MemoryResNet152():
-    return MemoryResNet(Bottleneck, [3, 8, 36, 3])
+def MemoryResNet18(use_correlation=True):
+    return MemoryResNet(BasicBlock, [2, 2, 2, 2], use_correlation=use_correlation)
+ 
+def MemoryResNet34(use_correlation=True):
+    return MemoryResNet(BasicBlock, [3, 4, 6, 3], use_correlation=use_correlation)
+ 
+def MemoryResNet50(use_correlation=True):
+    return MemoryResNet(Bottleneck, [3, 4, 6, 3], use_correlation=use_correlation)
+ 
+def MemoryResNet101(use_correlation=True):
+    return MemoryResNet(Bottleneck, [3, 4, 23, 3], use_correlation=use_correlation)
+ 
+def MemoryResNet152(use_correlation=True):
+    return MemoryResNet(Bottleneck, [3, 8, 36, 3], use_correlation=use_correlation)
