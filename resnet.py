@@ -267,17 +267,17 @@ def ResNet152():
     return ResNet(Bottleneck, [3, 8, 36, 3])
 
 
-def MemoryResNet18(use_correlation=True):
-    return MemoryResNet(BasicBlock, [2, 2, 2, 2], use_correlation=use_correlation)
+def MemoryResNet18(datset, use_correlation=True):
+    return MemoryResNet(BasicBlock, [2, 2, 2, 2], use_correlation=use_correlation, datset=datset)
  
-def MemoryResNet34(use_correlation=True):
-    return MemoryResNet(BasicBlock, [3, 4, 6, 3], use_correlation=use_correlation)
+def MemoryResNet34(datset, use_correlation=True):
+    return MemoryResNet(BasicBlock, [3, 4, 6, 3], use_correlation=use_correlation, datset=datset)
  
-def MemoryResNet50(use_correlation=True):
-    return MemoryResNet(Bottleneck, [3, 4, 6, 3], use_correlation=use_correlation)
+def MemoryResNet50(datset, use_correlation=True):
+    return MemoryResNet(Bottleneck, [3, 4, 6, 3], use_correlation=use_correlation, datset=datset)
  
-def MemoryResNet101(use_correlation=True):
-    return MemoryResNet(Bottleneck, [3, 4, 23, 3], use_correlation=use_correlation)
+def MemoryResNet101(datset, use_correlation=True):
+    return MemoryResNet(Bottleneck, [3, 4, 23, 3], use_correlation=use_correlation, datset=datset)
  
-def MemoryResNet152(use_correlation=True):
-    return MemoryResNet(Bottleneck, [3, 8, 36, 3], use_correlation=use_correlation)
+def MemoryResNet152(datset, use_correlation=True):
+    return MemoryResNet(Bottleneck, [3, 8, 36, 3], use_correlation=use_correlation, datset=datset)
