@@ -71,7 +71,7 @@ _backbone_map = {
     'resnet101': MemoryResNet101,
     'resnet152': MemoryResNet152,
 }
-model = _backbone_map[args.backbone](use_correlation=args.use_correlation).to(device)
+model = _backbone_map[args.backbone](use_correlation=args.use_correlation, dataset=args.dataset).to(device)
 
 if args.use_imagenet_weights:
     model = load_pretrained_imagenet(model, args.backbone)

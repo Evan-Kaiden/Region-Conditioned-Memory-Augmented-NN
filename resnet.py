@@ -115,10 +115,11 @@ class ResNet(nn.Module):
 
 class MemoryResNet(nn.Module):
     def __init__(self, block, num_blocks, num_classes=10,
-                 use_correlation=True, initialize=True):
+                 use_correlation=True, initialize=True, dataset=None):
         super(MemoryResNet, self).__init__()
         self.in_planes = 64
         self.use_correlation = use_correlation
+        self.dataset = dataset
  
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
@@ -184,38 +185,51 @@ class MemoryResNet(nn.Module):
     def forward(self, x, ss, return_weights=False):
         B = x.size(0)
         N = ss.size(0)
- 
+
         out    = F.relu(self.bn1(self.conv1(x)))
         out_mw = F.relu(self.bn1(self.conv1(ss)))
- 
+
         out    = self.layer1(out);    out_mw = self.layer1(out_mw)
         out    = self.layer2(out);    out_mw = self.layer2(out_mw)
         out    = self.layer3(out);    out_mw = self.layer3(out_mw)
-        out    = self.layer4(out);    out_mw = self.layer4(out_mw)
-        # out    : (B, C, H, W)
-        # out_mw : (N, C, H, W)
- 
-        if self.use_correlation:
-            self.last_query_feat  = out
-            self.last_memory_feat = out_mw
- 
-            out_mw_exp = (out_mw.unsqueeze(0)
+
+        if self.dataset in ('cifar10', 'cifar100'):
+            if self.use_correlation:
+                self.last_query_feat  = out
+                self.last_memory_feat = out_mw
+                out_mw_exp = (out_mw.unsqueeze(0)
+                                    .expand(B, -1, -1, -1, -1)
+                                    .reshape(B * N, *out_mw.shape[1:]))
+                out_mw, memory_maps, query_maps = self.apply_correlation_mask(out, out_mw_exp)
+            else:
+                out_mw = (out_mw.unsqueeze(0)
                                 .expand(B, -1, -1, -1, -1)
                                 .reshape(B * N, *out_mw.shape[1:]))
-            out_mw_masked, memory_maps, query_maps = self.apply_correlation_mask(
-                out, out_mw_exp)
-            out_mw = out_mw_masked
-        else:
-            out_mw = (out_mw.unsqueeze(0)
-                            .expand(B, -1, -1, -1, -1)
-                            .reshape(B * N, *out_mw.shape[1:]))
-            H, W   = out.shape[2], out.shape[3]
-            memory_maps = torch.zeros(B, N, H, W, device=x.device)
-            query_maps  = torch.zeros(B, N, H, W, device=x.device)
- 
+                H, W        = out.shape[2], out.shape[3]
+                memory_maps = torch.zeros(B, N, H, W, device=x.device)
+                query_maps  = torch.zeros(B, N, H, W, device=x.device)
+
+        out    = self.layer4(out);    out_mw = self.layer4(out_mw)
+
+        if self.dataset in ('stl10', 'oxfordpets'):
+            if self.use_correlation:
+                self.last_query_feat  = out
+                self.last_memory_feat = out_mw
+                out_mw_exp = (out_mw.unsqueeze(0)
+                                    .expand(B, -1, -1, -1, -1)
+                                    .reshape(B * N, *out_mw.shape[1:]))
+                out_mw, memory_maps, query_maps = self.apply_correlation_mask(out, out_mw_exp)
+            else:
+                out_mw = (out_mw.unsqueeze(0)
+                                .expand(B, -1, -1, -1, -1)
+                                .reshape(B * N, *out_mw.shape[1:]))
+                H, W        = out.shape[2], out.shape[3]
+                memory_maps = torch.zeros(B, N, H, W, device=x.device)
+                query_maps  = torch.zeros(B, N, H, W, device=x.device)
+
         out    = F.adaptive_avg_pool2d(out,    1).view(B, -1)
         out_mw = F.adaptive_avg_pool2d(out_mw, 1).view(B, N, -1)
- 
+
         if return_weights:
             logits_list, weights_list = [], []
             for b in range(B):
@@ -230,10 +244,8 @@ class MemoryResNet(nn.Module):
             for b in range(B):
                 out_list.append(self.mw(out[b:b+1], out_mw[b], return_weights=False))
             out_mw = torch.cat(out_list, dim=0)
- 
-        return out_mw, memory_maps, query_maps
- 
 
+        return out_mw, memory_maps, query_maps
 
 def ResNet18():
     return ResNet(BasicBlock, [2, 2, 2, 2])
