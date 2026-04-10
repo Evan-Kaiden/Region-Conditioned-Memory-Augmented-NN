@@ -7,8 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 # from memorywrap import MemoryWrapLayer as EncoderMemoryWrapLayer
-# from memorywrap import BaselineMemory as MemoryWrapLayer
-from memorywrap import MemoryWrapLayer
+from memorywrap import BaselineMemory as MemoryWrapLayer
+# from memorywrap import MemoryWrapLayer
 
 class BasicBlock(nn.Module):
     expansion = 1
