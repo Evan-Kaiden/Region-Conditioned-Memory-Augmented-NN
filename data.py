@@ -40,7 +40,7 @@ class Cifar10DataSet():
             self.testset,  batch_size=batch_size, shuffle=False
             )
         self.mem_loader   = torch.utils.data.DataLoader(
-            self.trainset, batch_size=batch_size, shuffle=True
+            self.trainset, batch_size=100, shuffle=True
             )
 
         self.classes = self.trainset.classes
@@ -71,7 +71,7 @@ class Cifar100DataSet():
             self.testset,  batch_size=batch_size, shuffle=False
             )
         self.mem_loader   = torch.utils.data.DataLoader(
-            self.trainset, batch_size=batch_size, shuffle=True
+            self.trainset, batch_size=200, shuffle=True
             )
 
         self.classes = self.trainset.classes
@@ -114,7 +114,7 @@ class STL10DataSet():
             self.testset,  batch_size=batch_size, shuffle=False
             )
         self.mem_loader   = torch.utils.data.DataLoader(
-            self.trainset, batch_size=batch_size, shuffle=True
+            self.trainset, batch_size=10, shuffle=True
             )
 
         self.classes = self.trainset.classes

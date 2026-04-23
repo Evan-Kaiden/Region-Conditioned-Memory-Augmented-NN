@@ -1,3 +1,4 @@
+import torch
 import torchvision.models as tv_models
 
 def load_pretrained_imagenet(model, arch='resnet18'):
@@ -39,3 +40,17 @@ def set_seed(seed):
 
 def get_mask_weight(epoch, warmup_epochs=10):
     return min(1.0, epoch / warmup_epochs)
+
+def get_encoder_out_channels(encoder, loader, device):
+    test_x, _ = next(iter(loader))
+    test_x = test_x[0:1]
+    out_channels = encoder(test_x.to(device)).size(1)
+    return out_channels
+
+def get_pytorch_device():
+    if torch.cuda.is_available():
+        return 'cuda'
+    if torch.mps.is_available():
+        return 'mps'
+    else:
+        return 'cpu'

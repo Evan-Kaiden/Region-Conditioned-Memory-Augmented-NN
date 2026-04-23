@@ -5,10 +5,10 @@ import argparse
 import os
 import logging
 
-from resnet import MemoryResNet18, MemoryResNet34, MemoryResNet50, MemoryResNet101, MemoryResNet152
-
+from resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152 #MemoryResNet18, MemoryResNet34, MemoryResNet50, MemoryResNet101, MemoryResNet152, 
+from cca_memory_model import CCAMemoryModel
 from data import get_dataloader
-from utils import set_seed, load_pretrained_imagenet
+from utils import set_seed, load_pretrained_imagenet, get_encoder_out_channels, get_pytorch_device
 from train import run
 
 
@@ -61,20 +61,37 @@ logger.info(f'Args    : {vars(args)}')
 
 set_seed(args.seed)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = get_pytorch_device()
+
 logger.info(f'Device  : {device}')
 
+# _backbone_map = {
+#     'resnet18':  MemoryResNet18,
+#     'resnet34':  MemoryResNet34,
+#     'resnet50':  MemoryResNet50,
+#     'resnet101': MemoryResNet101,
+#     'resnet152': MemoryResNet152,
+# }
+
+dset = get_dataloader(args.dataset, args.batch_size)
+
+
 _backbone_map = {
-    'resnet18':  MemoryResNet18,
-    'resnet34':  MemoryResNet34,
-    'resnet50':  MemoryResNet50,
-    'resnet101': MemoryResNet101,
-    'resnet152': MemoryResNet152,
+    'resnet18':  ResNet18,
+    'resnet34':  ResNet34,
+    'resnet50':  ResNet50,
+    'resnet101': ResNet101,
+    'resnet152': ResNet152,
 }
-model = _backbone_map[args.backbone](use_correlation=args.use_correlation, dataset=args.dataset).to(device)
+backbone = _backbone_map[args.backbone]().to(device) #(use_correlation=args.use_correlation, dataset=args.dataset).to(device)
 
 if args.use_imagenet_weights:
-    model = load_pretrained_imagenet(model, args.backbone)
+    backbone = load_pretrained_imagenet(backbone, args.backbone)
+
+
+
+out_channels = get_encoder_out_channels(backbone, dset.train_loader, device)
+model = CCAMemoryModel(encoder=backbone, encoder_out_channels=out_channels, num_classes=len(dset.classes)).to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
@@ -89,7 +106,6 @@ else:
     scheduler = None
 
 criterion = nn.CrossEntropyLoss()
-dset      = get_dataloader(args.dataset, args.batch_size)
 
 if __name__ == '__main__':
     run(args, model, optimizer, criterion, scheduler, dset, device, logger)

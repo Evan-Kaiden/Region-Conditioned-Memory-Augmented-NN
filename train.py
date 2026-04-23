@@ -5,15 +5,15 @@ import torch.nn.functional as F
 from generate_visuals import visualize_batch
 from utils import get_mask_weight
 from losses import spatial_contrastive_loss
-
+from tqdm import tqdm 
 
 def train_epoch(args, model, train_loader, mem_loader, optimizer, criterion, device, epoch, logger):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
 
     mem_iter = iter(mem_loader)
-    for batch_idx, (x, y) in enumerate(train_loader):
-        model.mask_weight = get_mask_weight(epoch)
+    for x, y in tqdm(train_loader, leave=False):
+        # model.mask_weight = get_mask_weight(epoch)
 
         try:
             mem_x, mem_y = next(mem_iter)
@@ -27,25 +27,28 @@ def train_epoch(args, model, train_loader, mem_loader, optimizer, criterion, dev
         B = x.shape[0]
         optimizer.zero_grad()
 
-        if args.use_correlation:
-            (logits, _att), memory_maps, query_maps = model(x, mem_x, return_weights=True)
-            cont_loss = spatial_contrastive_loss(
-                model.last_query_feat,
-                model.last_memory_feat,
-                y, mem_y,
-            )
-            cls_loss = criterion(logits, y)
-            loss = cls_loss + 0.25 * cont_loss
-        else:
-            # BaselineMemory path — no correlation, no contrastive loss
-            (logits, _att), memory_maps, query_maps = model(x, mem_x, return_weights=True)
-            loss = criterion(logits, y)
+        # if args.use_correlation:
+        #     (logits, _att), memory_maps, query_maps = model(x, mem_x, return_weights=True)
+        #     cont_loss = spatial_contrastive_loss(
+        #         model.last_query_feat,
+        #         model.last_memory_feat,
+        #         y, mem_y,
+        #     )
+        #     cls_loss = criterion(logits, y)
+        #     loss = cls_loss + 0.25 * cont_loss
+        # else:
+        #     # BaselineMemory path — no correlation, no contrastive loss
+        #     (logits, _att), memory_maps, query_maps = model(x, mem_x, return_weights=True)
+        #     loss = criterion(logits, y)
+        logits = model(x, mem_x)
+        loss = criterion(logits, y)
+
 
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
-        correct += logits.argmax(1).eq(y).sum().item()
+        correct += (logits.argmax(1) == y).sum().item()
         total += B
 
     train_loss = total_loss / len(train_loader)
@@ -56,7 +59,7 @@ def train_epoch(args, model, train_loader, mem_loader, optimizer, criterion, dev
 
 def test_epoch(args, model, dset, test_loader, mem_loader, criterion, device, epoch, logger):
     model.eval()
-    model.mask_weight = get_mask_weight(epoch)
+    # model.mask_weight = get_mask_weight(epoch)
     total_loss, correct, total = 0.0, 0, 0
 
     mem_iter = iter(mem_loader)
@@ -72,7 +75,8 @@ def test_epoch(args, model, dset, test_loader, mem_loader, criterion, device, ep
             mem_x = mem_x.to(device)
             B = x.shape[0]
 
-            (logits, att_weights), memory_maps, query_maps = model(x, mem_x, return_weights=True)
+            logits, extras = model(x, mem_x)
+            # (logits, att_weights), memory_maps, query_maps = model(x, mem_x, return_weights=True)
             loss = criterion(logits, y)
             total_loss += loss.item()
             correct += logits.argmax(1).eq(y).sum().item()
@@ -85,9 +89,9 @@ def test_epoch(args, model, dset, test_loader, mem_loader, criterion, device, ep
         visualize_batch(
             x=x[:n_vis],
             mem_x=mem_x,
-            query_maps=query_maps[:n_vis],
-            memory_maps=memory_maps[:n_vis],
-            att_weights=att_weights[:n_vis],
+            query_maps=extras['attn_batch'][:n_vis],
+            memory_maps=extras['attn_memory'][:n_vis],
+            att_weights=extras['content_weights'][:n_vis],
             labels=y[:n_vis],
             epoch=epoch,
             batch_idx=batch_idx,
