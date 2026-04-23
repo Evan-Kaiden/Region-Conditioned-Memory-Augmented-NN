@@ -75,7 +75,7 @@ def test_epoch(args, model, dset, test_loader, mem_loader, criterion, device, ep
             mem_x = mem_x.to(device)
             B = x.shape[0]
 
-            logits, extras = model(x, mem_x)
+            logits, extras = model(x, mem_x, return_extras=True)
             # (logits, att_weights), memory_maps, query_maps = model(x, mem_x, return_weights=True)
             loss = criterion(logits, y)
             total_loss += loss.item()
